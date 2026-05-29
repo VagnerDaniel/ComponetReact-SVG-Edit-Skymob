@@ -35,7 +35,7 @@ export const useEditorStore = create<EditorState & EditorActions>()(
     objects: [],
     selectedIds: new Set<string>(),
     activeTool: "select",
-    zoom: 1,
+    zoom: 2,
     snapEnabled: true,
     gridEnabled: false,
     clipboard: [],

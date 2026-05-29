@@ -21,12 +21,12 @@ function ZoomInput() {
   const setZoom = useEditorStore((s) => s.setZoom)
   const triggerFitToScreen = useEditorStore((s) => s.triggerFitToScreen)
 
-  const [zoomStr, setZoomStr] = useState(Math.round(zoom * 100) + "%")
+  const [zoomStr, setZoomStr] = useState(Math.round(zoom * 50) + "%")
   const [isOpen, setIsOpen] = useState(false)
   const containerRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    if (!isOpen) setZoomStr(Math.round(zoom * 100) + "%")
+    if (!isOpen) setZoomStr(Math.round(zoom * 50) + "%")
   }, [zoom, isOpen])
 
   useEffect(() => {
@@ -34,7 +34,7 @@ function ZoomInput() {
     const handleClickOutside = (e: PointerEvent | MouseEvent) => {
       if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
         setIsOpen(false)
-        setZoomStr(Math.round(useEditorStore.getState().zoom * 100) + "%")
+        setZoomStr(Math.round(useEditorStore.getState().zoom * 50) + "%")
         const input = containerRef.current.querySelector('input')
         if (input) input.blur()
       }
@@ -57,9 +57,9 @@ function ZoomInput() {
     }
     const parsed = parseInt(v.replace(/[^0-9]/g, ""), 10)
     if (!isNaN(parsed) && parsed > 0 && parsed <= 5000) {
-      setZoom(parsed / 100)
+      setZoom(parsed / 50)
     } else {
-      setZoomStr(Math.round(zoom * 100) + "%")
+      setZoomStr(Math.round(zoom * 50) + "%")
     }
   }
 
@@ -78,7 +78,7 @@ function ZoomInput() {
         onFocus={() => setIsOpen(true)}
         onBlur={() => {
           setIsOpen(false)
-          setZoomStr(Math.round(useEditorStore.getState().zoom * 100) + "%")
+          setZoomStr(Math.round(useEditorStore.getState().zoom * 50) + "%")
         }}
         onKeyDown={(e) => {
           if (e.key === "Enter") {
@@ -86,7 +86,7 @@ function ZoomInput() {
             e.currentTarget.blur()
           } else if (e.key === "Escape") {
             setIsOpen(false)
-            setZoomStr(Math.round(useEditorStore.getState().zoom * 100) + "%")
+            setZoomStr(Math.round(useEditorStore.getState().zoom * 50) + "%")
             e.currentTarget.blur()
           }
         }}
