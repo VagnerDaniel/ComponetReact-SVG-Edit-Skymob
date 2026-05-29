@@ -2,6 +2,8 @@ import { useEditorStore } from "@/stores/editor-store"
 
 export function GridOverlay() {
   const rulerUnit = useEditorStore((s) => s.rulerUnit)
+  const documentWidth = useEditorStore((s) => s.documentWidth)
+  const documentHeight = useEditorStore((s) => s.documentHeight)
   
   let minorSize = 20
   let majorCount = 5
@@ -19,7 +21,7 @@ export function GridOverlay() {
 
   const lines: React.ReactNode[] = []
   
-  for (let i = 0; i * minorSize <= 3000; i++) {
+  for (let i = 0; i * minorSize <= documentWidth; i++) {
     const pos = i * minorSize
     const isMajor = i % majorCount === 0
     lines.push(
@@ -28,14 +30,14 @@ export function GridOverlay() {
         x1={pos}
         y1={0}
         x2={pos}
-        y2={3000}
+        y2={documentHeight}
         stroke={isMajor ? "#d4d4d4" : "#e5e5e5"}
         strokeWidth={isMajor ? 0.8 : 0.3}
       />
     )
   }
   
-  for (let i = 0; i * minorSize <= 3000; i++) {
+  for (let i = 0; i * minorSize <= documentHeight; i++) {
     const pos = i * minorSize
     const isMajor = i % majorCount === 0
     lines.push(
@@ -43,7 +45,7 @@ export function GridOverlay() {
         key={`h${i}`}
         x1={0}
         y1={pos}
-        x2={3000}
+        x2={documentWidth}
         y2={pos}
         stroke={isMajor ? "#d4d4d4" : "#e5e5e5"}
         strokeWidth={isMajor ? 0.8 : 0.3}

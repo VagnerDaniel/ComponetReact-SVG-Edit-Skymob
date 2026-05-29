@@ -26,6 +26,7 @@ interface EditorActions {
   setPreviewFields: (enabled: boolean) => void
   setShowRulers: (enabled: boolean) => void
   setRulerUnit: (unit: "px" | "mm" | "cm" | "in") => void
+  triggerFitToScreen: (animated?: boolean) => void
 }
 
 export const useEditorStore = create<EditorState & EditorActions>()(
@@ -41,7 +42,10 @@ export const useEditorStore = create<EditorState & EditorActions>()(
     availableFields: [],
     previewFields: true,
     showRulers: true,
-    rulerUnit: "px" as const,
+    rulerUnit: "mm" as const,
+    documentWidth: 100 * 96 / 25.4,
+    documentHeight: 75 * 96 / 25.4,
+    fitToScreenTrigger: null,
 
     setShowRulers: (enabled) =>
       set((state) => {
@@ -51,6 +55,11 @@ export const useEditorStore = create<EditorState & EditorActions>()(
     setRulerUnit: (unit) =>
       set((state) => {
         state.rulerUnit = unit
+      }),
+
+    triggerFitToScreen: (animated = true) =>
+      set((state) => {
+        state.fitToScreenTrigger = { ts: Date.now(), animated }
       }),
 
     setPreviewFields: (enabled) =>

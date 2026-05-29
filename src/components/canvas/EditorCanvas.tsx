@@ -25,17 +25,53 @@ export function EditorCanvas() {
   const canvasRef = useRef<SvgCanvasHandle>(null)
   const [lineStart, setLineStart] = useState<{ x: number; y: number } | null>(null)
   const [lineEnd, setLineEnd] = useState<{ x: number; y: number } | null>(null)
-  const [translateFrom, setTranslateFrom] = useState<((x: number, y: number) => [number, number]) | null>(null)
+  // Removido translateFrom state que estava usando a função inversa (from canvas to screen) em vez de (from screen to canvas)
   const [matrix, setMatrix] = useState<[number, number, number, number, number, number]>([1, 0, 0, 1, 0, 0])
   const [draggedBounds, setDraggedBounds] = useState<RotatedBounds | null>(null)
   const [draggingGuide, setDraggingGuide] = useState<{ axis: "x" | "y"; pos: number } | null>(null)
   const [guides, setGuides] = useState<{ axis: "x" | "y"; pos: number }[]>([])
+
+  const getCanvasCoordinates = useCallback((clientX: number, clientY: number): [number, number] => {
+    const svgEl = containerRef.current?.querySelector("svg")
+    if (!svgEl) return [clientX, clientY]
+    
+    const rect = svgEl.getBoundingClientRect()
+    const localX = clientX - rect.left
+    const localY = clientY - rect.top
+    
+    const [scale, , , , tx, ty] = matrix
+    return [(localX - tx) / scale, (localY - ty) / scale]
+  }, [matrix])
+
   const shiftHeldRef = useRef(false)
   const [editingTextId, setEditingTextId] = useState<string | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const availableFields = useEditorStore((s) => s.availableFields)
+  const documentWidth = useEditorStore((s) => s.documentWidth)
+  const documentHeight = useEditorStore((s) => s.documentHeight)
   const showRulers = useEditorStore((s) => s.showRulers)
   const rulerUnit = useEditorStore((s) => s.rulerUnit)
+  const storeZoom = useEditorStore((s) => s.zoom)
+
+  useEffect(() => {
+    if (Math.abs(storeZoom - matrix[0]) > 0.001 && canvasRef.current) {
+      const svgEl = containerRef.current?.querySelector("svg")
+      if (svgEl) {
+        const rect = svgEl.getBoundingClientRect()
+        const viewCenterX = rect.width / 2
+        const viewCenterY = rect.height / 2
+        
+        const startScale = matrix[0]
+        const startCenterX = (viewCenterX - matrix[4]) / startScale
+        const startCenterY = (viewCenterY - matrix[5]) / startScale
+        
+        const newTx = viewCenterX - startCenterX * storeZoom
+        const newTy = viewCenterY - startCenterY * storeZoom
+        
+        canvasRef.current.setMatrix([storeZoom, 0, 0, storeZoom, newTx, newTy])
+      }
+    }
+  }, [storeZoom, matrix])
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -388,7 +424,7 @@ export function EditorCanvas() {
       e.stopPropagation()
 
       const bounds = selection.selectionBounds
-      if (!bounds || !translateFrom) return
+      if (!bounds) return
 
       pushSnapshot()
 
@@ -399,7 +435,7 @@ export function EditorCanvas() {
 
       const startClientX = e.clientX
       const startClientY = e.clientY
-      const startSvg = translateFrom(startClientX, startClientY)
+      const startSvg = getCanvasCoordinates(startClientX, startClientY)
       const startBounds = { ...bounds }
       const minSize = 5
 
@@ -413,8 +449,7 @@ export function EditorCanvas() {
       const selectedObjectIds = Array.from(selIds)
 
       const onPointerMove = (ev: PointerEvent) => {
-        if (!translateFrom) return
-        const currentSvg = translateFrom(ev.clientX, ev.clientY)
+        const currentSvg = getCanvasCoordinates(ev.clientX, ev.clientY)
         const dx = currentSvg[0] - startSvg[0]
         const dy = currentSvg[1] - startSvg[1]
 
@@ -512,14 +547,12 @@ export function EditorCanvas() {
       svgEl.addEventListener("pointermove", onPointerMove)
       svgEl.addEventListener("pointerup", onPointerUp)
     },
-    [selection.selectionBounds, translateFrom, pushSnapshot, objects, selectedIds]
+    [selection.selectionBounds, pushSnapshot, objects, selectedIds, getCanvasCoordinates]
   )
 
   const handleRotateStart = useCallback((e: React.PointerEvent) => {
     e.preventDefault()
     e.stopPropagation()
-
-    if (!translateFrom) return
 
     const store = useEditorStore.getState()
     const currentSelectedIds = store.selectedIds
@@ -529,12 +562,17 @@ export function EditorCanvas() {
     const svgEl = (e.target as Element).closest("svg")
     if (!svgEl) return
 
-    svgEl.setPointerCapture(e.pointerId)
+    const bounds = selection.selectionBounds
+    if (!bounds) return
 
     const single = currentSelectedIds.size === 1 ? store.objects.find((o) => currentSelectedIds.has(o.id)) : null
-    const pivotSvgX = single ? single.x + (single.pivotX ?? 0.5) * single.width : 0
-    const pivotSvgY = single ? single.y + (single.pivotY ?? 0.5) * single.height : 0
-    const startSvg = translateFrom(e.clientX, e.clientY)
+    const boxX = single ? (single.type === "line" ? Math.min(single.x, (single as any).x2) : single.x) : 0
+    const boxY = single ? (single.type === "line" ? Math.min(single.y, (single as any).y2) : single.y) : 0
+    
+    const pivotSvgX = single ? boxX + (single.pivotX ?? 0.5) * single.width : bounds.x + bounds.width / 2
+    const pivotSvgY = single ? boxY + (single.pivotY ?? 0.5) * single.height : bounds.y + bounds.height / 2
+    
+    const startSvg = getCanvasCoordinates(e.clientX, e.clientY)
     const startAngle = Math.atan2(startSvg[1] - pivotSvgY, startSvg[0] - pivotSvgX)
 
     const initialRotations = new Map<string, number>()
@@ -544,8 +582,7 @@ export function EditorCanvas() {
     }
 
     const onPointerMove = (ev: PointerEvent) => {
-      if (!translateFrom) return
-      const currentSvg = translateFrom(ev.clientX, ev.clientY)
+      const currentSvg = getCanvasCoordinates(ev.clientX, ev.clientY)
       const currentAngle = Math.atan2(currentSvg[1] - pivotSvgY, currentSvg[0] - pivotSvgX)
       const deltaAngle = (currentAngle - startAngle) * 180 / Math.PI
 
@@ -563,64 +600,70 @@ export function EditorCanvas() {
 
     svgEl.addEventListener("pointermove", onPointerMove)
     svgEl.addEventListener("pointerup", onPointerUp)
-  }, [translateFrom, pushSnapshot])
+  }, [pushSnapshot, getCanvasCoordinates])
 
   const handlePivotStart = useCallback((e: React.PointerEvent) => {
     e.preventDefault()
     e.stopPropagation()
-
-    if (!translateFrom) return
+    e.stopPropagation()
+    e.preventDefault()
+    pushSnapshot()
 
     const store = useEditorStore.getState()
     const currentSelectedIds = store.selectedIds
-
-    pushSnapshot()
-
-    const svgEl = (e.target as Element).closest("svg")
-    if (!svgEl) return
-
-    svgEl.setPointerCapture(e.pointerId)
-
     const single = currentSelectedIds.size === 1 ? store.objects.find((o) => currentSelectedIds.has(o.id)) : null
     if (!single) return
 
-    const startSvg = translateFrom(e.clientX, e.clientY)
+    const startSvg = getCanvasCoordinates(e.clientX, e.clientY)
     const initialPivotX = single.pivotX ?? 0.5
     const initialPivotY = single.pivotY ?? 0.5
+    
+    // Calcula as coordenadas reais da quina superior esquerda
+    const initialBoxX = single.type === "line" ? Math.min(single.x, (single as any).x2) : single.x
+    const initialBoxY = single.type === "line" ? Math.min(single.y, (single as any).y2) : single.y
+    
+    // Pivô absoluto em coordenadas SVG globais
+    const initialPivotAbsX = initialBoxX + initialPivotX * single.width
+    const initialPivotAbsY = initialBoxY + initialPivotY * single.height
+
     const initialX = single.x
     const initialY = single.y
     const initialX2 = single.type === "line" ? (single as any).x2 : undefined
     const initialY2 = single.type === "line" ? (single as any).y2 : undefined
+    
     const rotation = single.rotation || 0
     const angleRad = rotation * Math.PI / 180
+    const cos = Math.cos(angleRad)
+    const sin = Math.sin(angleRad)
 
     const onPointerMove = (ev: PointerEvent) => {
-      if (!translateFrom) return
-      const currentSvg = translateFrom(ev.clientX, ev.clientY)
+      const currentSvg = getCanvasCoordinates(ev.clientX, ev.clientY)
       
-      const dxVis = currentSvg[0] - startSvg[0]
-      const dyVis = currentSvg[1] - startSvg[1]
+      const dxSvg = currentSvg[0] - startSvg[0]
+      const dySvg = currentSvg[1] - startSvg[1]
 
-      const cos = Math.cos(angleRad)
-      const sin = Math.sin(angleRad)
+      const dpX = dxSvg * cos + dySvg * sin
+      const dpY = -dxSvg * sin + dySvg * cos
 
-      const dpX = dxVis * cos + dyVis * sin
-      const dpY = -dxVis * sin + dyVis * cos
+      const newX = initialX + dxSvg - dpX
+      const newY = initialY + dySvg - dpY
+      
+      let newX2 = initialX2
+      let newY2 = initialY2
 
-      const pxUnclamped = initialPivotX + dpX / single.width
-      const pyUnclamped = initialPivotY + dpY / single.height
+      if (single.type === "line" && newX2 !== undefined && newY2 !== undefined) {
+        newX2 = initialX2 + dxSvg - dpX
+        newY2 = initialY2 + dySvg - dpY
+      }
 
-      const px = pxUnclamped
-      const py = pyUnclamped
+      const newBoxX = single.type === "line" ? Math.min(newX, newX2!) : newX
+      const newBoxY = single.type === "line" ? Math.min(newY, newY2!) : newY
 
-      const actualDpX = (px - initialPivotX) * single.width
-      const actualDpY = (py - initialPivotY) * single.height
+      const currentAbsolutePivotX = initialPivotAbsX + dxSvg
+      const currentAbsolutePivotY = initialPivotAbsY + dySvg
 
-      const actualDxVis = actualDpX * cos - actualDpY * sin
-      const actualDyVis = actualDpX * sin + actualDpY * cos
-
-      const newX = initialX - actualDpX + actualDxVis
-      const newY = initialY - actualDpY + actualDyVis
+      const px = (currentAbsolutePivotX - newBoxX) / Math.max(1, single.width)
+      const py = (currentAbsolutePivotY - newBoxY) / Math.max(1, single.height)
 
       const updateData: any = {
         pivotX: px,
@@ -629,32 +672,31 @@ export function EditorCanvas() {
         y: newY
       }
 
-      if (single.type === "line" && initialX2 !== undefined && initialY2 !== undefined) {
-        updateData.x2 = initialX2 - actualDpX + actualDxVis
-        updateData.y2 = initialY2 - actualDpY + actualDyVis
+      if (single.type === "line") {
+        updateData.x2 = newX2
+        updateData.y2 = newY2
       }
 
       useEditorStore.getState().updateObject(single.id, updateData)
     }
 
     const onPointerUp = () => {
-      svgEl.removeEventListener("pointermove", onPointerMove)
-      svgEl.removeEventListener("pointerup", onPointerUp)
+      window.removeEventListener("pointermove", onPointerMove)
+      window.removeEventListener("pointerup", onPointerUp)
     }
 
-    svgEl.addEventListener("pointermove", onPointerMove)
-    svgEl.addEventListener("pointerup", onPointerUp)
-  }, [translateFrom, pushSnapshot])
+    window.addEventListener("pointermove", onPointerMove)
+    window.addEventListener("pointerup", onPointerUp)
+  }, [pushSnapshot, useEditorStore, matrix])
 
   const handleDoubleClick = useCallback((e: React.MouseEvent) => {
-    if (!translateFrom) return
-    const pt = translateFrom(e.clientX, e.clientY)
+    const pt = getCanvasCoordinates(e.clientX, e.clientY)
     const hit = getTopmostAtPoint({ x: pt[0], y: pt[1] })
     if (hit && hit.type === "text") {
       setEditingTextId(hit.id)
       setActiveTool("select")
     }
-  }, [translateFrom, getTopmostAtPoint, setActiveTool])
+  }, [getTopmostAtPoint, setActiveTool, getCanvasCoordinates])
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     if (e.dataTransfer.types.includes("application/field-key")) {
@@ -666,7 +708,7 @@ export function EditorCanvas() {
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
       const key = e.dataTransfer.getData("application/field-key")
-      if (!key || !translateFrom) return
+      if (!key) return
 
       e.preventDefault()
       
@@ -675,8 +717,8 @@ export function EditorCanvas() {
       const localX = e.clientX - rect.left
       const localY = e.clientY - rect.top
       
-      // Convert to SVG coordinates
-      const [svgX, svgY] = translateFrom(localX, localY)
+      // Convert
+      const [svgX, svgY] = getCanvasCoordinates(e.clientX, e.clientY)
 
       pushSnapshot()
       const id = crypto.randomUUID()
@@ -703,7 +745,7 @@ export function EditorCanvas() {
       setSelectedIds(new Set([id]))
       setActiveTool("select")
     },
-    [translateFrom, pushSnapshot, setSelectedIds, setActiveTool]
+    [pushSnapshot, setSelectedIds, setActiveTool, getCanvasCoordinates]
   )
 
   const handleGuideDragStart = useCallback(
@@ -787,8 +829,11 @@ export function EditorCanvas() {
           onToolMove={handleToolMove}
           onToolEnd={handleToolEnd}
           onContextReady={(ctx) => {
-            setTranslateFrom(() => ctx.translateFrom)
-            setMatrix([...ctx.matrix] as [number, number, number, number, number, number])
+            const newMatrix = [...ctx.matrix] as [number, number, number, number, number, number]
+            setMatrix(newMatrix)
+            if (Math.abs(newMatrix[0] - useEditorStore.getState().zoom) > 0.001) {
+              useEditorStore.getState().setZoom(newMatrix[0])
+            }
           }}
           fixed={
             <SnapGuides
@@ -799,6 +844,19 @@ export function EditorCanvas() {
             />
           }
         >
+        {/* Stage / Palco */}
+        <rect
+          x={0}
+          y={0}
+          width={documentWidth}
+          height={documentHeight}
+          fill="white"
+          stroke="#e5e5e5"
+          strokeWidth={1}
+          style={{ filter: "drop-shadow(0px 4px 10px rgba(0,0,0,0.08))" }}
+          pointerEvents="none"
+        />
+
         {gridEnabled && <GridOverlay />}
 
       {lineStart && lineEnd && (
@@ -991,8 +1049,11 @@ export function EditorCanvas() {
 
       {selection.selectionBounds && activeTool === "select" && (() => {
         const single = selectedIds.size === 1 ? objects.find((o) => selectedIds.has(o.id)) : null
+        const boxX = single ? (single.type === "line" ? Math.min(single.x, (single as any).x2) : single.x) : 0
+        const boxY = single ? (single.type === "line" ? Math.min(single.y, (single as any).y2) : single.y) : 0
+        
         const boxBounds = single
-          ? { x: single.x, y: single.y, width: single.width, height: single.height }
+          ? { x: boxX, y: boxY, width: single.width, height: single.height }
           : selection.selectionBounds
         const boxRotation = single?.rotation || 0
         return (

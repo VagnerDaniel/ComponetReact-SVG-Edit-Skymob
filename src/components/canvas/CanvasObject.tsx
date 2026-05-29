@@ -13,8 +13,10 @@ export function CanvasObjectRenderer({ object, isSelected }: Props) {
   const previewFields = useEditorStore((s) => s.previewFields)
   const strokeWidth = object.strokeWidth
   const stroke = object.stroke === "none" && strokeWidth > 0 ? "#000000" : object.stroke
-  const pivotX = object.x + (object.pivotX ?? 0.5) * object.width
-  const pivotY = object.y + (object.pivotY ?? 0.5) * object.height
+  const boxX = object.type === "line" ? Math.min(object.x, (object as any).x2) : object.x
+  const boxY = object.type === "line" ? Math.min(object.y, (object as any).y2) : object.y
+  const pivotX = boxX + (object.pivotX ?? 0.5) * object.width
+  const pivotY = boxY + (object.pivotY ?? 0.5) * object.height
   const rotationTransform = object.rotation ? `rotate(${object.rotation} ${pivotX} ${pivotY})` : undefined
 
   switch (object.type) {

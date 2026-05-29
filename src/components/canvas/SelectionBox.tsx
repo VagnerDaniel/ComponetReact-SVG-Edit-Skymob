@@ -27,7 +27,7 @@ export function SelectionBox({
   onRotateStart,
   onPivotStart,
 }: Props) {
-  const handleSize = 8
+  const handleSize = 1.5
 
   const centerX = bounds.x + bounds.width / 2
   const pivotSvgX = bounds.x + pivotX * bounds.width
@@ -52,8 +52,8 @@ export function SelectionBox({
             onPivotStart(e)
           }}
         >
-          <circle cx={pivotSvgX} cy={pivotSvgY} r={5} fill="white" stroke={stroke} strokeWidth={1.5} />
-          <circle cx={pivotSvgX} cy={pivotSvgY} r={1.5} fill={stroke} stroke="none" />
+          <circle cx={pivotSvgX} cy={pivotSvgY} r={1} fill="white" stroke={stroke} strokeWidth={0.3} />
+          <circle cx={pivotSvgX} cy={pivotSvgY} r={0.3} fill={stroke} stroke="none" />
         </g>
       )}
 
@@ -63,17 +63,17 @@ export function SelectionBox({
             x1={centerX}
             y1={bounds.y}
             x2={centerX}
-            y2={bounds.y - 20}
+            y2={bounds.y - 10}
             stroke={stroke}
-            strokeWidth={1.5}
+            strokeWidth={0.5}
           />
           <circle
             cx={centerX}
-            cy={bounds.y - 20}
-            r={5}
+            cy={bounds.y - 10}
+            r={1}
             fill="white"
             stroke={stroke}
-            strokeWidth={1.5}
+            strokeWidth={0.3}
             style={{ cursor: "grab" }}
             onPointerDown={(e) => {
               e.stopPropagation()
@@ -93,7 +93,7 @@ export function SelectionBox({
             height={handleSize}
             fill="white"
             stroke={stroke}
-            strokeWidth={1}
+            strokeWidth={0.5}
             style={{ cursor: "nw-resize" }}
             onPointerDown={createHandleHandler("nw")}
           />
@@ -104,7 +104,7 @@ export function SelectionBox({
             height={handleSize}
             fill="white"
             stroke={stroke}
-            strokeWidth={1}
+            strokeWidth={0.5}
             style={{ cursor: "n-resize" }}
             onPointerDown={createHandleHandler("n")}
           />
@@ -115,7 +115,7 @@ export function SelectionBox({
             height={handleSize}
             fill="white"
             stroke={stroke}
-            strokeWidth={1}
+            strokeWidth={0.5}
             style={{ cursor: "ne-resize" }}
             onPointerDown={createHandleHandler("ne")}
           />
@@ -126,7 +126,7 @@ export function SelectionBox({
             height={handleSize}
             fill="white"
             stroke={stroke}
-            strokeWidth={1}
+            strokeWidth={0.5}
             style={{ cursor: "e-resize" }}
             onPointerDown={createHandleHandler("e")}
           />
@@ -137,7 +137,7 @@ export function SelectionBox({
             height={handleSize}
             fill="white"
             stroke={stroke}
-            strokeWidth={1}
+            strokeWidth={0.5}
             style={{ cursor: "se-resize" }}
             onPointerDown={createHandleHandler("se")}
           />
@@ -148,7 +148,7 @@ export function SelectionBox({
             height={handleSize}
             fill="white"
             stroke={stroke}
-            strokeWidth={1}
+            strokeWidth={0.5}
             style={{ cursor: "s-resize" }}
             onPointerDown={createHandleHandler("s")}
           />
@@ -159,7 +159,7 @@ export function SelectionBox({
             height={handleSize}
             fill="white"
             stroke={stroke}
-            strokeWidth={1}
+            strokeWidth={0.5}
             style={{ cursor: "sw-resize" }}
             onPointerDown={createHandleHandler("sw")}
           />
@@ -170,7 +170,7 @@ export function SelectionBox({
             height={handleSize}
             fill="white"
             stroke={stroke}
-            strokeWidth={1}
+            strokeWidth={0.5}
             style={{ cursor: "w-resize" }}
             onPointerDown={createHandleHandler("w")}
           />

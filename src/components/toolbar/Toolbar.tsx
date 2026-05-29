@@ -1,3 +1,4 @@
+import { useState, useEffect, useRef } from "react"
 import {
   Undo2,
   Redo2,
@@ -15,6 +16,114 @@ import { useEditorStore } from "@/stores/editor-store"
 import { useHistoryStore } from "@/stores/history-store"
 import { objectsToSVG, downloadSVG, svgToObjects } from "@/utils/svg-io"
 
+function ZoomInput() {
+  const zoom = useEditorStore((s) => s.zoom)
+  const setZoom = useEditorStore((s) => s.setZoom)
+  const triggerFitToScreen = useEditorStore((s) => s.triggerFitToScreen)
+
+  const [zoomStr, setZoomStr] = useState(Math.round(zoom * 100) + "%")
+  const [isOpen, setIsOpen] = useState(false)
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!isOpen) setZoomStr(Math.round(zoom * 100) + "%")
+  }, [zoom, isOpen])
+
+  useEffect(() => {
+    if (!isOpen) return
+    const handleClickOutside = (e: PointerEvent | MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setIsOpen(false)
+        setZoomStr(Math.round(useEditorStore.getState().zoom * 100) + "%")
+        const input = containerRef.current.querySelector('input')
+        if (input) input.blur()
+      }
+    }
+    document.addEventListener("pointerdown", handleClickOutside, { capture: true })
+    document.addEventListener("mousedown", handleClickOutside, { capture: true })
+    document.addEventListener("touchstart", handleClickOutside, { capture: true })
+    return () => {
+      document.removeEventListener("pointerdown", handleClickOutside, { capture: true })
+      document.removeEventListener("mousedown", handleClickOutside, { capture: true })
+      document.removeEventListener("touchstart", handleClickOutside, { capture: true })
+    }
+  }, [isOpen])
+
+  const handleZoomSubmit = (v: string) => {
+    setIsOpen(false)
+    if (v === "fit" || v === "Encaixar") {
+      triggerFitToScreen()
+      return
+    }
+    const parsed = parseInt(v.replace(/[^0-9]/g, ""), 10)
+    if (!isNaN(parsed) && parsed > 0 && parsed <= 5000) {
+      setZoom(parsed / 100)
+    } else {
+      setZoomStr(Math.round(zoom * 100) + "%")
+    }
+  }
+
+  const options = ["Encaixar", "30%", "50%", "75%", "100%", "125%", "150%", "200%", "300%"]
+
+  return (
+    <div ref={containerRef} className="relative flex items-center h-7 group">
+      <input
+        type="text"
+        className="h-full w-[55px] text-xs bg-transparent outline-none group-hover:bg-slate-100 focus:bg-white focus:ring-1 focus:ring-blue-400 rounded-l px-1 text-center transition-all"
+        value={zoomStr}
+        onChange={(e) => {
+          setZoomStr(e.target.value)
+          setIsOpen(true)
+        }}
+        onFocus={() => setIsOpen(true)}
+        onBlur={() => {
+          setIsOpen(false)
+          setZoomStr(Math.round(useEditorStore.getState().zoom * 100) + "%")
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            handleZoomSubmit(zoomStr)
+            e.currentTarget.blur()
+          } else if (e.key === "Escape") {
+            setIsOpen(false)
+            setZoomStr(Math.round(useEditorStore.getState().zoom * 100) + "%")
+            e.currentTarget.blur()
+          }
+        }}
+      />
+      <button
+        className="h-full px-1.5 text-muted-foreground group-hover:bg-slate-100 rounded-r flex items-center justify-center outline-none"
+        onMouseDown={(e) => {
+          e.preventDefault()
+          setIsOpen(!isOpen)
+        }}
+        tabIndex={-1}
+      >
+        <svg width="10" height="6" viewBox="0 0 10 6" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M1 1L5 5L9 1" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+        </svg>
+      </button>
+
+      {isOpen && (
+        <div className="absolute top-full mt-1 left-0 w-[90px] bg-white border border-slate-200 rounded shadow-lg py-1 z-50">
+          {options.map((opt) => (
+            <button
+              key={opt}
+              className="w-full text-left px-3 py-1.5 text-xs hover:bg-slate-100"
+              onMouseDown={(e) => {
+                e.preventDefault()
+                handleZoomSubmit(opt)
+              }}
+            >
+              {opt}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function Toolbar() {
   const objects = useEditorStore((s) => s.objects)
   const snapEnabled = useEditorStore((s) => s.snapEnabled)
@@ -23,6 +132,7 @@ export function Toolbar() {
   const setGridEnabled = useEditorStore((s) => s.setGridEnabled)
   const zoom = useEditorStore((s) => s.zoom)
   const setZoom = useEditorStore((s) => s.setZoom)
+  const triggerFitToScreen = useEditorStore((s) => s.triggerFitToScreen)
   const pushSnapshot = useHistoryStore((s) => s.pushSnapshot)
   const undo = useHistoryStore((s) => s.undo)
   const redo = useHistoryStore((s) => s.redo)
@@ -118,15 +228,17 @@ export function Toolbar() {
 
       <Separator orientation="vertical" className="h-4" />
 
-      <div className="flex items-center gap-1">
-        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setZoom(zoom - 0.1)} title="Zoom Out (Ctrl+-)">
-          <ZoomOut className="h-3.5 w-3.5" />
-        </Button>
-        <span className="text-xs tabular-nums w-10 text-center select-none">{Math.round(zoom * 100)}%</span>
-        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setZoom(zoom + 0.1)} title="Zoom In (Ctrl+=)">
-          <ZoomIn className="h-3.5 w-3.5" />
-        </Button>
-      </div>
+        <div className="flex items-center gap-1">
+          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setZoom(zoom - 0.1)} title="Zoom Out (Ctrl+-)">
+            <ZoomOut className="h-3.5 w-3.5" />
+          </Button>
+          
+          <ZoomInput />
+
+          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setZoom(zoom + 0.1)} title="Zoom In (Ctrl+=)">
+            <ZoomIn className="h-3.5 w-3.5" />
+          </Button>
+        </div>
 
       <div className="flex-1" />
 
