@@ -7,19 +7,31 @@ interface Props {
   strokeWidth?: number
   strokeDasharray?: string
   showHandles?: boolean
+  pivotX?: number
+  pivotY?: number
   onResizeStart?: (handle: ResizeHandle, e: React.PointerEvent) => void
+  onRotateStart?: (e: React.PointerEvent) => void
+  onPivotStart?: (e: React.PointerEvent) => void
 }
 
 export function SelectionBox({
   bounds,
   rotation = 0,
   stroke = "#6366f1",
-  strokeWidth = 1.5,
-  strokeDasharray = "4 2",
+  strokeWidth: _strokeWidth = 1.5,
+  strokeDasharray: _strokeDasharray = "4 2",
   showHandles = true,
+  pivotX = 0.5,
+  pivotY = 0.5,
   onResizeStart,
+  onRotateStart,
+  onPivotStart,
 }: Props) {
   const handleSize = 8
+
+  const centerX = bounds.x + bounds.width / 2
+  const pivotSvgX = bounds.x + pivotX * bounds.width
+  const pivotSvgY = bounds.y + pivotY * bounds.height
 
   function createHandleHandler(handle: ResizeHandle) {
     return (e: React.PointerEvent) => {
@@ -30,18 +42,48 @@ export function SelectionBox({
   }
 
   return (
-    <g transform={rotation ? `rotate(${rotation} ${bounds.x + bounds.width / 2} ${bounds.y + bounds.height / 2})` : ""}>
-      <rect
-        x={bounds.x}
-        y={bounds.y}
-        width={bounds.width}
-        height={bounds.height}
-        fill="none"
-        stroke={stroke}
-        strokeWidth={strokeWidth}
-        strokeDasharray={strokeDasharray}
-        pointerEvents="none"
-      />
+    <g transform={rotation ? `rotate(${rotation} ${pivotSvgX} ${pivotSvgY})` : ""}>
+      {showHandles && onPivotStart && (
+        <g
+          style={{ cursor: "crosshair" }}
+          onPointerDown={(e) => {
+            e.stopPropagation()
+            e.preventDefault()
+            onPivotStart(e)
+          }}
+        >
+          <circle cx={pivotSvgX} cy={pivotSvgY} r={5} fill="white" stroke={stroke} strokeWidth={1.5} />
+          <circle cx={pivotSvgX} cy={pivotSvgY} r={1.5} fill={stroke} stroke="none" />
+        </g>
+      )}
+
+      {showHandles && onRotateStart && (
+        <>
+          <line
+            x1={centerX}
+            y1={bounds.y}
+            x2={centerX}
+            y2={bounds.y - 20}
+            stroke={stroke}
+            strokeWidth={1.5}
+          />
+          <circle
+            cx={centerX}
+            cy={bounds.y - 20}
+            r={5}
+            fill="white"
+            stroke={stroke}
+            strokeWidth={1.5}
+            style={{ cursor: "grab" }}
+            onPointerDown={(e) => {
+              e.stopPropagation()
+              e.preventDefault()
+              onRotateStart(e)
+            }}
+          />
+        </>
+      )}
+
       {showHandles && (
         <>
           <rect

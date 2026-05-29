@@ -35,7 +35,8 @@ export function ColorPalette() {
         className="flex items-center justify-center w-5 h-5 rounded border border-border hover:bg-accent cursor-pointer"
         title="No fill"
         onClick={() => setFill("none")}
-        onContextMenu={(e) => { e.preventDefault(); setStroke("none") }}
+        onContextMenu={(e) => e.preventDefault()}
+        onMouseDown={(e) => { if (e.button === 2) { e.preventDefault(); setStroke("none") } }}
       >
         <X className="h-3 w-3 text-muted-foreground" />
       </button>
@@ -46,7 +47,8 @@ export function ColorPalette() {
           style={{ backgroundColor: color, borderColor: color === "#ffffff" ? "#d1d5db" : color }}
           title={color}
           onClick={() => setFill(color)}
-          onContextMenu={(e) => { e.preventDefault(); setStroke(color) }}
+          onContextMenu={(e) => e.preventDefault()}
+          onMouseDown={(e) => { if (e.button === 2) { e.preventDefault(); setStroke(color) } }}
         />
       ))}
     </div>

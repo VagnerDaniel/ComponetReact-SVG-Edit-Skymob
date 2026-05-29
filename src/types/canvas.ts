@@ -12,11 +12,14 @@ export interface CanvasObject {
   fill: string
   stroke: string
   strokeWidth: number
+  strokeDasharray?: string
   rotation: number
   opacity: number
   visible: boolean
   locked: boolean
   name: string
+  pivotX?: number
+  pivotY?: number
   metadata?: Record<string, string>
 }
 
@@ -42,6 +45,11 @@ export interface TextObject extends CanvasObject {
   fontSize: number
   fontFamily: string
   fontWeight: string
+  textMode?: "inline" | "box"
+  bgFill?: string
+  bgStroke?: string
+  bgStrokeWidth?: number
+  bgStrokeDasharray?: string
 }
 
 export type AnyCanvasObject = RectObject | EllipseObject | LineObject | TextObject

@@ -36,6 +36,7 @@ export function FieldsPanel() {
 
   const handleDragStart = (e: React.DragEvent, key: string) => {
     e.dataTransfer.setData("application/field-key", key)
+    e.dataTransfer.setData("text/plain", `<${"`"}${key}${"`"}>`)
     e.dataTransfer.effectAllowed = "copy"
   }
 

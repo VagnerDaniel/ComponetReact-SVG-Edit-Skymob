@@ -1,4 +1,5 @@
-import { useCallback, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
+import { flushSync } from "react-dom"
 import {
   SvgCanvas,
   useSelection,
@@ -7,20 +8,70 @@ import {
   type SvgCanvasHandle,
   DEFAULT_SNAP_CONFIG,
 } from "react-svg-canvas"
-import type { Bounds, ResizeHandle, ToolEvent, SnapSpatialObject } from "react-svg-canvas"
+import type { Bounds, ResizeHandle, ToolEvent, SnapSpatialObject, RotatedBounds } from "react-svg-canvas"
 import { useEditorStore } from "@/stores/editor-store"
 import { useHistoryStore } from "@/stores/history-store"
 import { CanvasObjectRenderer } from "./CanvasObject"
 import { SelectionBox } from "./SelectionBox"
 import { GridOverlay } from "./GridOverlay"
+import { useHotkeys } from "react-hotkeys-hook"
+import { Ruler } from "./Ruler"
 import type { LineObject, TextObject } from "@/types/canvas"
 
 const VIEW_BOUNDS: Bounds = { x: 0, y: 0, width: 3000, height: 3000 }
 
 export function EditorCanvas() {
+  const containerRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<SvgCanvasHandle>(null)
   const [lineStart, setLineStart] = useState<{ x: number; y: number } | null>(null)
+  const [lineEnd, setLineEnd] = useState<{ x: number; y: number } | null>(null)
   const [translateFrom, setTranslateFrom] = useState<((x: number, y: number) => [number, number]) | null>(null)
+  const [matrix, setMatrix] = useState<[number, number, number, number, number, number]>([1, 0, 0, 1, 0, 0])
+  const [draggedBounds, setDraggedBounds] = useState<RotatedBounds | null>(null)
+  const [draggingGuide, setDraggingGuide] = useState<{ axis: "x" | "y"; pos: number } | null>(null)
+  const [guides, setGuides] = useState<{ axis: "x" | "y"; pos: number }[]>([])
+  const shiftHeldRef = useRef(false)
+  const [editingTextId, setEditingTextId] = useState<string | null>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const availableFields = useEditorStore((s) => s.availableFields)
+  const showRulers = useEditorStore((s) => s.showRulers)
+  const rulerUnit = useEditorStore((s) => s.rulerUnit)
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Shift") shiftHeldRef.current = true
+    }
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.key === "Shift") shiftHeldRef.current = false
+    }
+    document.addEventListener("keydown", onKeyDown)
+    document.addEventListener("keyup", onKeyUp)
+    return () => {
+      document.removeEventListener("keydown", onKeyDown)
+      document.removeEventListener("keyup", onKeyUp)
+    }
+  }, [])
+
+  const drawRef = useRef<{
+    type: "rect" | "ellipse"
+    startX: number
+    startY: number
+    preview: { x: number; y: number; width: number; height: number } | null
+  } | null>(null)
+  const [drawPreview, setDrawPreview] = useState<{
+    type: "rect" | "ellipse"
+    x: number
+    y: number
+    width: number
+    height: number
+  } | null>(null)
+  const dragRef = useRef<{
+    startX: number
+    startY: number
+    initialPositions: Map<string, { x: number; y: number; x2?: number; y2?: number }>
+    primaryId: string
+    grabPoint: { x: number; y: number }
+  } | null>(null)
 
   const objects = useEditorStore((s) => s.objects)
   const selectedIds = useEditorStore((s) => s.selectedIds)
@@ -31,6 +82,13 @@ export function EditorCanvas() {
   const snapEnabled = useEditorStore((s) => s.snapEnabled)
   const gridEnabled = useEditorStore((s) => s.gridEnabled)
   const pushSnapshot = useHistoryStore((s) => s.pushSnapshot)
+
+  useEffect(() => {
+    if (activeTool !== "line") {
+      setLineStart(null)
+      setLineEnd(null)
+    }
+  }, [activeTool])
 
   const spatialObjects: SnapSpatialObject[] = objects.map((o) => ({
     id: o.id,
@@ -54,11 +112,34 @@ export function EditorCanvas() {
       for (let i = objects.length - 1; i >= 0; i--) {
         const obj = objects[i]
         if (obj.locked) continue
-        if (
-          point.x >= obj.x &&
-          point.x <= obj.x + obj.width &&
-          point.y >= obj.y &&
-          point.y <= obj.y + obj.height
+
+        const pivX = obj.x + (obj.pivotX ?? 0.5) * obj.width
+        const pivY = obj.y + (obj.pivotY ?? 0.5) * obj.height
+
+        let px = point.x
+        let py = point.y
+
+        if (obj.rotation) {
+          const angleRad = -obj.rotation * Math.PI / 180
+          const cos = Math.cos(angleRad)
+          const sin = Math.sin(angleRad)
+          const dx = px - pivX
+          const dy = py - pivY
+          px = pivX + dx * cos - dy * sin
+          py = pivY + dx * sin + dy * cos
+        }
+
+        if (obj.type === "ellipse") {
+          const cx = obj.x + obj.width / 2
+          const cy = obj.y + obj.height / 2
+          const dx = (px - cx) / (obj.width / 2)
+          const dy = (py - cy) / (obj.height / 2)
+          if (dx * dx + dy * dy <= 1) return obj
+        } else if (
+          px >= obj.x &&
+          px <= obj.x + obj.width &&
+          py >= obj.y &&
+          py <= obj.y + obj.height
         ) {
           return obj
         }
@@ -76,57 +157,48 @@ export function EditorCanvas() {
         const hit = getTopmostAtPoint(pt)
         if (hit) {
           selection.select(hit.id, e.shiftKey ?? false)
+          pushSnapshot()
+
+          const expectedIds = e.shiftKey
+            ? (selectedIds.has(hit.id)
+              ? new Set([...selectedIds].filter((id) => id !== hit.id))
+              : new Set([...selectedIds, hit.id]))
+            : new Set([hit.id])
+
+          const initialPositions = new Map<string, { x: number; y: number; x2?: number; y2?: number }>()
+          for (const id of expectedIds) {
+            const obj = objects.find((o) => o.id === id)
+            if (obj && !obj.locked) {
+              initialPositions.set(id, {
+                x: obj.x,
+                y: obj.y,
+                ...(obj.type === "line" ? { x2: (obj as LineObject).x2, y2: (obj as LineObject).y2 } : {}),
+              })
+            }
+          }
+          const hitObj = objects.find((o) => o.id === hit.id)
+          const grabPoint = hitObj ? {
+            x: (pt.x - hitObj.x) / hitObj.width,
+            y: (pt.y - hitObj.y) / hitObj.height,
+          } : { x: 0.5, y: 0.5 }
+          dragRef.current = { startX: pt.x, startY: pt.y, initialPositions, primaryId: hit.id, grabPoint }
         } else {
-          clearSelection()
+          selection.clear()
         }
+        return
       }
 
-      if (activeTool === "rect") {
-        pushSnapshot()
-        const id = crypto.randomUUID()
-        useEditorStore.getState().addObject({
-          id,
-          type: "rect",
-          x: pt.x,
-          y: pt.y,
-          width: 100,
-          height: 80,
-          rx: 0,
-          ry: 0,
-          fill: "#3b82f6",
-          stroke: "#1d4ed8",
-          strokeWidth: 2,
-          rotation: 0,
-          opacity: 1,
-          visible: true,
-          locked: false,
-          name: "Rectangle",
-        } as any)
-        setSelectedIds(new Set([id]))
-        setActiveTool("select")
-      }
-
-      if (activeTool === "ellipse") {
-        pushSnapshot()
-        const id = crypto.randomUUID()
-        useEditorStore.getState().addObject({
-          id,
-          type: "ellipse",
-          x: pt.x,
-          y: pt.y,
-          width: 100,
-          height: 80,
-          fill: "#10b981",
-          stroke: "#047857",
-          strokeWidth: 2,
-          rotation: 0,
-          opacity: 1,
-          visible: true,
-          locked: false,
-          name: "Ellipse",
-        } as any)
-        setSelectedIds(new Set([id]))
-        setActiveTool("select")
+      if (activeTool === "rect" || activeTool === "ellipse" || activeTool === "text") {
+        if (activeTool === "text") {
+          const hit = getTopmostAtPoint(pt)
+          if (hit && hit.type === "text") {
+            setEditingTextId(hit.id)
+            setActiveTool("select")
+            return
+          }
+        }
+        drawRef.current = { type: activeTool, startX: pt.x, startY: pt.y, preview: null }
+        return
       }
 
       if (activeTool === "line") {
@@ -157,39 +229,158 @@ export function EditorCanvas() {
           } as LineObject)
           setSelectedIds(new Set([id]))
           setLineStart(null)
+          setLineEnd(null)
           setActiveTool("select")
         }
       }
 
-      if (activeTool === "text") {
-        pushSnapshot()
-        const id = crypto.randomUUID()
-        useEditorStore.getState().addObject({
-          id,
-          type: "text",
-          x: pt.x,
-          y: pt.y,
-          width: 120,
-          height: 28,
-          text: "Double-click to edit",
-          fontSize: 20,
-          fontFamily: "Arial, sans-serif",
-          fontWeight: "normal",
-          fill: "#000",
-          stroke: "none",
-          strokeWidth: 0,
-          rotation: 0,
-          opacity: 1,
-          visible: true,
-          locked: false,
-          name: "Text",
-        } as TextObject)
-        setSelectedIds(new Set([id]))
-        setActiveTool("select")
-      }
+
     },
     [activeTool, getTopmostAtPoint, selection, clearSelection, pushSnapshot, setSelectedIds, setActiveTool, lineStart]
   )
+
+  const handleToolMove = useCallback((e: ToolEvent) => {
+    if (drawRef.current) {
+      const { startX, startY } = drawRef.current
+      let x = startX
+      let y = startY
+      let w = e.x - startX
+      let h = e.y - startY
+
+      if (w < 0) { x = e.x; w = -w }
+      if (h < 0) { y = e.y; h = -h }
+
+      if (shiftHeldRef.current) {
+        const size = Math.max(w, h)
+        w = size
+        h = size
+      }
+
+      const preview = { x, y, width: Math.max(5, w), height: Math.max(5, h) }
+      drawRef.current = { ...drawRef.current, preview }
+      setDrawPreview({ type: drawRef.current.type as "rect" | "ellipse", ...preview })
+      return
+    }
+
+    if (lineStart) {
+      setLineEnd({ x: e.x, y: e.y })
+      return
+    }
+
+    if (!dragRef.current) return
+    const { startX, startY, initialPositions, primaryId, grabPoint } = dragRef.current
+    const dx = e.x - startX
+    const dy = e.y - startY
+
+    const primaryInitial = initialPositions.get(primaryId)
+    if (!primaryInitial) return
+
+    const primaryObj = useEditorStore.getState().objects.find((o) => o.id === primaryId)
+    if (!primaryObj) return
+
+    const snapResult = snapping.snapDrag({
+      bounds: {
+        x: primaryInitial.x + dx,
+        y: primaryInitial.y + dy,
+        width: primaryObj.width,
+        height: primaryObj.height,
+        rotation: primaryObj.rotation || 0,
+      },
+      objectId: primaryId,
+      delta: { x: dx, y: dy },
+      grabPoint,
+      excludeIds: new Set(initialPositions.keys()),
+    })
+
+    const snappedDx = snapResult.position.x - primaryInitial.x
+    const snappedDy = snapResult.position.y - primaryInitial.y
+
+    flushSync(() => {
+      setDraggedBounds({
+        x: primaryInitial.x + snappedDx,
+        y: primaryInitial.y + snappedDy,
+        width: primaryObj.width,
+        height: primaryObj.height,
+        rotation: primaryObj.rotation || 0,
+      })
+    })
+
+    for (const [id, pos] of initialPositions) {
+      const obj = useEditorStore.getState().objects.find((o) => o.id === id)
+      if (!obj || obj.locked) continue
+
+      if (obj.type === "line" && pos.x2 !== undefined && pos.y2 !== undefined) {
+        useEditorStore.getState().updateObject(id, {
+          x: pos.x + snappedDx,
+          y: pos.y + snappedDy,
+          x2: pos.x2 + snappedDx,
+          y2: pos.y2 + snappedDy,
+        } as Partial<LineObject>)
+      } else {
+        useEditorStore.getState().updateObject(id, {
+          x: pos.x + snappedDx,
+          y: pos.y + snappedDy,
+        })
+      }
+    }
+  }, [snapping, lineStart])
+
+  const handleToolEnd = useCallback(() => {
+    if (drawRef.current) {
+      const { type, startX, startY, preview } = drawRef.current
+
+      function createObj(x: number, y: number, w: number, h: number, isClick: boolean) {
+        const id = crypto.randomUUID()
+        if (type === "rect") {
+          useEditorStore.getState().addObject({
+            id, type: "rect",
+            x, y, width: w, height: h,
+            rx: 0, ry: 0,
+            fill: "#3b82f6", stroke: "#1d4ed8", strokeWidth: 2,
+            rotation: 0, opacity: 1, visible: true, locked: false, name: "Rectangle",
+          } as any)
+        } else if (type === "ellipse") {
+          useEditorStore.getState().addObject({
+            id, type: "ellipse",
+            x, y, width: w, height: h,
+            fill: "#10b981", stroke: "#047857", strokeWidth: 2,
+            rotation: 0, opacity: 1, visible: true, locked: false, name: "Ellipse",
+          } as any)
+        } else if (type === "text") {
+          useEditorStore.getState().addObject({
+            id, type: "text",
+            x, y, width: isClick ? 120 : w, height: isClick ? 28 : h,
+            text: "Duplo-clique para editar",
+            fontSize: 20,
+            fontFamily: "Arial, sans-serif",
+            fontWeight: "normal",
+            textMode: isClick ? "inline" : "box",
+            fill: "#000", stroke: "none", strokeWidth: 0,
+            rotation: 0, opacity: 1, visible: true, locked: false, name: "Texto",
+          } as TextObject)
+          setEditingTextId(id)
+        }
+        setSelectedIds(new Set([id]))
+      }
+
+      if (preview && preview.width >= 5 && preview.height >= 5) {
+        pushSnapshot()
+        createObj(preview.x, preview.y, preview.width, preview.height, false)
+        setActiveTool("select")
+      } else {
+        pushSnapshot()
+        createObj(startX, startY, 100, 80, true)
+        setActiveTool("select")
+      }
+      drawRef.current = null
+      setDrawPreview(null)
+      return
+    }
+
+    dragRef.current = null
+    setDraggedBounds(null)
+    snapping.clearSnaps()
+  }, [snapping, pushSnapshot, setSelectedIds, setActiveTool])
 
   const handleResizeStart = useCallback(
     (handle: ResizeHandle, e: React.PointerEvent) => {
@@ -324,6 +515,147 @@ export function EditorCanvas() {
     [selection.selectionBounds, translateFrom, pushSnapshot, objects, selectedIds]
   )
 
+  const handleRotateStart = useCallback((e: React.PointerEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+
+    if (!translateFrom) return
+
+    const store = useEditorStore.getState()
+    const currentSelectedIds = store.selectedIds
+
+    pushSnapshot()
+
+    const svgEl = (e.target as Element).closest("svg")
+    if (!svgEl) return
+
+    svgEl.setPointerCapture(e.pointerId)
+
+    const single = currentSelectedIds.size === 1 ? store.objects.find((o) => currentSelectedIds.has(o.id)) : null
+    const pivotSvgX = single ? single.x + (single.pivotX ?? 0.5) * single.width : 0
+    const pivotSvgY = single ? single.y + (single.pivotY ?? 0.5) * single.height : 0
+    const startSvg = translateFrom(e.clientX, e.clientY)
+    const startAngle = Math.atan2(startSvg[1] - pivotSvgY, startSvg[0] - pivotSvgX)
+
+    const initialRotations = new Map<string, number>()
+    for (const id of currentSelectedIds) {
+      const obj = store.objects.find((o) => o.id === id)
+      if (obj) initialRotations.set(id, obj.rotation)
+    }
+
+    const onPointerMove = (ev: PointerEvent) => {
+      if (!translateFrom) return
+      const currentSvg = translateFrom(ev.clientX, ev.clientY)
+      const currentAngle = Math.atan2(currentSvg[1] - pivotSvgY, currentSvg[0] - pivotSvgX)
+      const deltaAngle = (currentAngle - startAngle) * 180 / Math.PI
+
+      for (const [id, initialRotation] of initialRotations) {
+        useEditorStore.getState().updateObject(id, {
+          rotation: ((initialRotation + deltaAngle) % 360 + 360) % 360,
+        })
+      }
+    }
+
+    const onPointerUp = () => {
+      svgEl.removeEventListener("pointermove", onPointerMove)
+      svgEl.removeEventListener("pointerup", onPointerUp)
+    }
+
+    svgEl.addEventListener("pointermove", onPointerMove)
+    svgEl.addEventListener("pointerup", onPointerUp)
+  }, [translateFrom, pushSnapshot])
+
+  const handlePivotStart = useCallback((e: React.PointerEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+
+    if (!translateFrom) return
+
+    const store = useEditorStore.getState()
+    const currentSelectedIds = store.selectedIds
+
+    pushSnapshot()
+
+    const svgEl = (e.target as Element).closest("svg")
+    if (!svgEl) return
+
+    svgEl.setPointerCapture(e.pointerId)
+
+    const single = currentSelectedIds.size === 1 ? store.objects.find((o) => currentSelectedIds.has(o.id)) : null
+    if (!single) return
+
+    const startSvg = translateFrom(e.clientX, e.clientY)
+    const initialPivotX = single.pivotX ?? 0.5
+    const initialPivotY = single.pivotY ?? 0.5
+    const initialX = single.x
+    const initialY = single.y
+    const initialX2 = single.type === "line" ? (single as any).x2 : undefined
+    const initialY2 = single.type === "line" ? (single as any).y2 : undefined
+    const rotation = single.rotation || 0
+    const angleRad = rotation * Math.PI / 180
+
+    const onPointerMove = (ev: PointerEvent) => {
+      if (!translateFrom) return
+      const currentSvg = translateFrom(ev.clientX, ev.clientY)
+      
+      const dxVis = currentSvg[0] - startSvg[0]
+      const dyVis = currentSvg[1] - startSvg[1]
+
+      const cos = Math.cos(angleRad)
+      const sin = Math.sin(angleRad)
+
+      const dpX = dxVis * cos + dyVis * sin
+      const dpY = -dxVis * sin + dyVis * cos
+
+      const pxUnclamped = initialPivotX + dpX / single.width
+      const pyUnclamped = initialPivotY + dpY / single.height
+
+      const px = pxUnclamped
+      const py = pyUnclamped
+
+      const actualDpX = (px - initialPivotX) * single.width
+      const actualDpY = (py - initialPivotY) * single.height
+
+      const actualDxVis = actualDpX * cos - actualDpY * sin
+      const actualDyVis = actualDpX * sin + actualDpY * cos
+
+      const newX = initialX - actualDpX + actualDxVis
+      const newY = initialY - actualDpY + actualDyVis
+
+      const updateData: any = {
+        pivotX: px,
+        pivotY: py,
+        x: newX,
+        y: newY
+      }
+
+      if (single.type === "line" && initialX2 !== undefined && initialY2 !== undefined) {
+        updateData.x2 = initialX2 - actualDpX + actualDxVis
+        updateData.y2 = initialY2 - actualDpY + actualDyVis
+      }
+
+      useEditorStore.getState().updateObject(single.id, updateData)
+    }
+
+    const onPointerUp = () => {
+      svgEl.removeEventListener("pointermove", onPointerMove)
+      svgEl.removeEventListener("pointerup", onPointerUp)
+    }
+
+    svgEl.addEventListener("pointermove", onPointerMove)
+    svgEl.addEventListener("pointerup", onPointerUp)
+  }, [translateFrom, pushSnapshot])
+
+  const handleDoubleClick = useCallback((e: React.MouseEvent) => {
+    if (!translateFrom) return
+    const pt = translateFrom(e.clientX, e.clientY)
+    const hit = getTopmostAtPoint({ x: pt[0], y: pt[1] })
+    if (hit && hit.type === "text") {
+      setEditingTextId(hit.id)
+      setActiveTool("select")
+    }
+  }, [translateFrom, getTopmostAtPoint, setActiveTool])
+
   const handleDragOver = useCallback((e: React.DragEvent) => {
     if (e.dataTransfer.types.includes("application/field-key")) {
       e.preventDefault()
@@ -374,38 +706,160 @@ export function EditorCanvas() {
     [translateFrom, pushSnapshot, setSelectedIds, setActiveTool]
   )
 
-  return (
-    <div
-      className="w-full h-full flex flex-col"
-      onDragOver={handleDragOver}
-      onDrop={handleDrop}
-    >
-      <SvgCanvas
-        ref={canvasRef}
-        className="flex-1"
-        style={{ width: "100%", height: "100%", background: "#f8f9fa" }}
-        onToolStart={handleToolStart}
-        onContextReady={(ctx) => setTranslateFrom(() => ctx.translateFrom)}
-        fixed={
-          <SnapGuides
-            activeSnaps={snapping.activeSnaps}
-            config={DEFAULT_SNAP_CONFIG.guides}
-            viewBounds={VIEW_BOUNDS}
-          />
+  const handleGuideDragStart = useCallback(
+    (axis: "x" | "y", startEvent: React.PointerEvent) => {
+      const containerRect = containerRef.current?.getBoundingClientRect()
+      if (!containerRect) return
+      
+      const svgLeft = containerRect.left + (showRulers ? 24 : 0)
+      const svgTop = containerRect.top + (showRulers ? 24 : 0)
+
+      const getLogicalPos = (clientX: number, clientY: number) => {
+        if (axis === "x") {
+          return (clientX - svgLeft - matrix[4]) / matrix[0]
+        } else {
+          return (clientY - svgTop - matrix[5]) / matrix[0]
         }
+      }
+
+      const initialPos = getLogicalPos(startEvent.clientX, startEvent.clientY)
+      setDraggingGuide({ axis, pos: initialPos })
+
+      const onMove = (e: PointerEvent) => {
+        setDraggingGuide({ axis, pos: getLogicalPos(e.clientX, e.clientY) })
+      }
+
+      const onUp = (e: PointerEvent) => {
+        const finalPos = getLogicalPos(e.clientX, e.clientY)
+        
+        let shouldKeep = true
+        if (axis === "x" && e.clientX - containerRect.left < 24) shouldKeep = false
+        if (axis === "y" && e.clientY - containerRect.top < 24) shouldKeep = false
+
+        if (shouldKeep) {
+          setGuides((prev) => [...prev, { axis, pos: finalPos }])
+        }
+
+        setDraggingGuide(null)
+        window.removeEventListener("pointermove", onMove)
+        window.removeEventListener("pointerup", onUp)
+      }
+
+      window.addEventListener("pointermove", onMove)
+      window.addEventListener("pointerup", onUp)
+    },
+    [matrix, showRulers]
+  )
+
+  return (
+    <div className="w-full h-full flex flex-col relative" ref={containerRef}>
+      {/* Top Ruler Container */}
+      {showRulers && (
+        <div className="absolute top-0 left-[24px] right-0 h-[24px] bg-slate-50 border-b border-slate-200 z-10">
+          <Ruler orientation="horizontal" pan={matrix[4]} zoom={matrix[0]} unit={rulerUnit} onPointerDown={(e) => handleGuideDragStart("y", e)} />
+        </div>
+      )}
+      
+      {/* Left Ruler Container */}
+      {showRulers && (
+        <div className="absolute top-[24px] left-0 bottom-0 w-[24px] bg-slate-50 border-r border-slate-200 z-10">
+          <Ruler orientation="vertical" pan={matrix[5]} zoom={matrix[0]} unit={rulerUnit} onPointerDown={(e) => handleGuideDragStart("x", e)} />
+        </div>
+      )}
+
+      {/* Top Left Corner Square */}
+      {showRulers && (
+        <div className="absolute top-0 left-0 w-[24px] h-[24px] bg-slate-50 border-r border-b border-slate-200 z-20" />
+      )}
+
+      {/* Main Canvas Area */}
+      <div
+        className={`absolute right-0 bottom-0 ${showRulers ? 'top-[24px] left-[24px]' : 'top-0 left-0'}`}
+        onDragOver={handleDragOver}
+        onDrop={handleDrop}
+        onDoubleClick={handleDoubleClick}
       >
+        <SvgCanvas
+          ref={canvasRef}
+          className="w-full h-full"
+          style={{ background: "#f8f9fa" }}
+          onToolStart={handleToolStart}
+          onToolMove={handleToolMove}
+          onToolEnd={handleToolEnd}
+          onContextReady={(ctx) => {
+            setTranslateFrom(() => ctx.translateFrom)
+            setMatrix([...ctx.matrix] as [number, number, number, number, number, number])
+          }}
+          fixed={
+            <SnapGuides
+              activeSnaps={snapping.activeSnaps}
+              config={DEFAULT_SNAP_CONFIG.guides}
+              viewBounds={VIEW_BOUNDS}
+              draggedBounds={draggedBounds ?? undefined}
+            />
+          }
+        >
         {gridEnabled && <GridOverlay />}
 
-      {lineStart && (
+      {lineStart && lineEnd && (
         <line
           x1={lineStart.x}
           y1={lineStart.y}
-          x2={lineStart.x + 1}
-          y2={lineStart.y + 1}
+          x2={lineEnd.x}
+          y2={lineEnd.y}
           stroke="#000"
           strokeWidth={2}
           strokeDasharray="4 2"
           opacity={0.5}
+        />
+      )}
+
+      {/* Rulers Guides */}
+      {guides.map((g, i) => (
+        <g
+          key={i}
+          className={`cursor-${g.axis === 'y' ? 'ns' : 'ew'}-resize group`}
+          onPointerDown={(e) => {
+            e.stopPropagation()
+            setGuides((prev) => prev.filter((_, idx) => idx !== i))
+            handleGuideDragStart(g.axis, e)
+          }}
+        >
+          {/* Hit area invisível grossa */}
+          <line
+            x1={g.axis === "y" ? -99999 : g.pos}
+            y1={g.axis === "x" ? -99999 : g.pos}
+            x2={g.axis === "y" ? 99999 : g.pos}
+            y2={g.axis === "x" ? 99999 : g.pos}
+            stroke="transparent"
+            strokeWidth={10 / matrix[0]}
+            pointerEvents="all"
+          />
+          {/* Linha visual fina */}
+          <line
+            x1={g.axis === "y" ? -99999 : g.pos}
+            y1={g.axis === "x" ? -99999 : g.pos}
+            x2={g.axis === "y" ? 99999 : g.pos}
+            y2={g.axis === "x" ? 99999 : g.pos}
+            stroke="#0ea5e9"
+            strokeWidth={1 / matrix[0]}
+            strokeDasharray={`${4 / matrix[0]} ${4 / matrix[0]}`}
+            pointerEvents="none"
+            className="group-hover:stroke-blue-500 group-hover:stroke-[1.5px]"
+          />
+        </g>
+      ))}
+      
+      {draggingGuide && (
+        <line
+          x1={draggingGuide.axis === "y" ? -99999 : draggingGuide.pos}
+          y1={draggingGuide.axis === "x" ? -99999 : draggingGuide.pos}
+          x2={draggingGuide.axis === "y" ? 99999 : draggingGuide.pos}
+          y2={draggingGuide.axis === "x" ? 99999 : draggingGuide.pos}
+          stroke="#0ea5e9"
+          strokeWidth={1 / matrix[0]}
+          strokeDasharray={`${4 / matrix[0]} ${4 / matrix[0]}`}
+          pointerEvents="none"
         />
       )}
 
@@ -419,13 +873,142 @@ export function EditorCanvas() {
           />
         ))}
 
-      {selection.selectionBounds && activeTool === "select" && (
+      {editingTextId && (() => {
+        const t = objects.find((o) => o.id === editingTextId) as TextObject | undefined
+        if (!t) return null
+        const pivotX = t.x + (t.pivotX ?? 0.5) * t.width
+        const pivotY = t.y + (t.pivotY ?? 0.5) * t.height
+        const rotationTransform = t.rotation ? `rotate(${t.rotation} ${pivotX} ${pivotY})` : undefined
+
+        return (
+          <g transform={rotationTransform}>
+            <foreignObject
+              x={t.x - 4}
+              y={t.y - 4}
+              width={Math.max(t.width + 200, 400)}
+              height={Math.max(t.height + 200, 400)}
+              style={{ overflow: "visible" }}
+            >
+              <div className="flex flex-col gap-1 w-fit" onPointerDown={(e) => e.stopPropagation()}>
+                <textarea
+                  ref={textareaRef}
+                  autoFocus
+                defaultValue={t.text}
+                onPointerDown={(e) => e.stopPropagation()}
+                onKeyDown={(e) => {
+                  e.stopPropagation()
+                  if (e.key === "Escape") setEditingTextId(null)
+                }}
+                onBlur={(e) => {
+                  const target = e.target
+                  useEditorStore.getState().updateObject(t.id, { 
+                    text: target.value,
+                    width: t.textMode === "box" ? t.width : Math.max(20, target.scrollWidth - 4),
+                    height: Math.max(20, target.scrollHeight - 4)
+                  })
+                  setEditingTextId(null)
+                }}
+                style={{
+                  width: t.textMode === "box" ? t.width + 8 : "max-content",
+                  height: t.textMode === "box" ? t.height + 8 : "max-content",
+                  minWidth: t.textMode === "box" ? undefined : t.width + 8,
+                  minHeight: t.textMode === "box" ? undefined : t.height + 8,
+                  fontSize: t.fontSize,
+                  fontFamily: t.fontFamily,
+                  fontWeight: t.fontWeight,
+                  color: t.fill,
+                  background: "white",
+                  border: "2px dashed #2563eb",
+                  outline: "none",
+                  resize: "none",
+                  padding: "2px",
+                  margin: 0,
+                  lineHeight: 1.2,
+                  whiteSpace: t.textMode === "box" ? "pre-wrap" : "pre",
+                  overflow: "hidden",
+                  boxShadow: "0 0 0 2px rgba(37, 99, 235, 0.2)",
+                  borderRadius: "4px"
+                }}
+              />
+              <div 
+                className="flex flex-wrap gap-1 bg-white border border-gray-300 p-1 rounded shadow-sm w-max max-w-[400px] max-h-[120px] overflow-y-auto"
+                onMouseDown={(e) => e.preventDefault()} // Prevents textarea from losing focus
+              >
+                {(availableFields && availableFields.length > 0 ? availableFields : [
+                  { key: "test-texto", label: "Texto Teste" }, 
+                  { key: "test-numero", label: "Número Teste" }
+                ]).map((f) => (
+                  <button
+                    key={f.key}
+                    onClick={() => {
+                      if (!textareaRef.current) return
+                      const el = textareaRef.current
+                      const start = el.selectionStart
+                      const end = el.selectionEnd
+                      const currentVal = el.value
+                      const textToInsert = `<${"`"}${f.key}${"`"}>`
+                      const newVal = currentVal.substring(0, start) + textToInsert + currentVal.substring(end)
+                      el.value = newVal
+                      useEditorStore.getState().updateObject(t.id, { text: newVal })
+                      el.focus()
+                      el.setSelectionRange(start + textToInsert.length, start + textToInsert.length)
+                    }}
+                    className="text-[10px] bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded hover:bg-blue-100 cursor-pointer"
+                  >
+                    +{f.label}
+                  </button>
+                ))}
+              </div>
+              </div>
+            </foreignObject>
+          </g>
+        )
+      })()}
+
+      {drawPreview && (drawPreview.type === "rect" ? (
+        <rect
+          x={drawPreview.x}
+          y={drawPreview.y}
+          width={drawPreview.width}
+          height={drawPreview.height}
+          fill="#3b82f6"
+          fillOpacity={0.15}
+          stroke="#3b82f6"
+          strokeWidth={2}
+        />
+      ) : (
+        <ellipse
+          cx={drawPreview.x + drawPreview.width / 2}
+          cy={drawPreview.y + drawPreview.height / 2}
+          rx={drawPreview.width / 2}
+          ry={drawPreview.height / 2}
+          fill="#10b981"
+          fillOpacity={0.15}
+          stroke="#10b981"
+          strokeWidth={2}
+        />
+      ))}
+
+      {selection.selectionBounds && activeTool === "select" && (() => {
+        const single = selectedIds.size === 1 ? objects.find((o) => selectedIds.has(o.id)) : null
+        const boxBounds = single
+          ? { x: single.x, y: single.y, width: single.width, height: single.height }
+          : selection.selectionBounds
+        const boxRotation = single?.rotation || 0
+        return (
           <SelectionBox
-            bounds={selection.selectionBounds}
+            bounds={boxBounds}
+            rotation={boxRotation}
+            pivotX={single?.pivotX}
+            pivotY={single?.pivotY}
             onResizeStart={handleResizeStart}
+            onRotateStart={handleRotateStart}
+            onPivotStart={single && selectedIds.size === 1 ? handlePivotStart : undefined}
           />
-        )}
+        )
+      })()}
       </SvgCanvas>
+      </div>
     </div>
   )
 }

@@ -1,12 +1,13 @@
 import {
   Undo2,
   Redo2,
-  Download,
-  Upload,
   Grid3x3,
   Magnet,
   ZoomIn,
   ZoomOut,
+  Upload,
+  Download,
+  Ruler as RulerIcon,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
@@ -27,6 +28,10 @@ export function Toolbar() {
   const redo = useHistoryStore((s) => s.redo)
   const canUndo = useHistoryStore((s) => s.canUndo)
   const canRedo = useHistoryStore((s) => s.canRedo)
+  const showRulers = useEditorStore((s) => s.showRulers)
+  const setShowRulers = useEditorStore((s) => s.setShowRulers)
+  const rulerUnit = useEditorStore((s) => s.rulerUnit)
+  const setRulerUnit = useEditorStore((s) => s.setRulerUnit)
 
   function handleImport() {
     const input = document.createElement("input")
@@ -87,6 +92,28 @@ export function Toolbar() {
         >
           <Magnet className="h-3.5 w-3.5" />
         </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          className={`h-7 w-7 rounded-md transition-all duration-200 border ${showRulers ? "bg-primary/[0.05] border-primary/20 text-primary shadow-sm" : "border-transparent text-muted-foreground hover:bg-accent/60"}`}
+          onClick={() => setShowRulers(!showRulers)}
+          title="Réguas"
+        >
+          <RulerIcon className="h-3.5 w-3.5" />
+        </Button>
+        {showRulers && (
+          <select 
+            className="h-7 text-xs bg-transparent border border-transparent hover:border-border rounded px-1 cursor-pointer outline-none text-muted-foreground"
+            value={rulerUnit}
+            onChange={(e) => setRulerUnit(e.target.value as any)}
+            title="Unidade da Régua"
+          >
+            <option value="px">px</option>
+            <option value="mm">mm</option>
+            <option value="cm">cm</option>
+            <option value="in">in</option>
+          </select>
+        )}
       </div>
 
       <Separator orientation="vertical" className="h-4" />
@@ -111,6 +138,44 @@ export function Toolbar() {
         <Button variant="outline" size="sm" className="h-7 text-xs px-2" onClick={handleExport} disabled={objects.length === 0}>
           <Download className="h-3.5 w-3.5 mr-1" />
           Export
+        </Button>
+        <Button 
+          variant="default" 
+          size="sm" 
+          className="h-7 text-xs px-2 bg-blue-600 hover:bg-blue-700 text-white border-none shadow-sm" 
+          onClick={async () => {
+            if (objects.length === 0) return
+            try {
+              const res = await fetch("http://localhost:3001/api/generate", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  objects: objects,
+                  format: "png",
+                  data: [
+                    { "test-texto": "Primeiro Crachá", "test-numero": "12345" },
+                    { "test-texto": "Segundo Crachá", "test-numero": "67890" },
+                    { "test-texto": "Crachá do Vagner com um texto gigantesco para testar a quebra de linha", "test-numero": "99999" }
+                  ]
+                })
+              })
+              
+              if (!res.ok) throw new Error("Falha na geração")
+              
+              const blob = await res.blob()
+              const url = URL.createObjectURL(blob)
+              const a = document.createElement("a")
+              a.href = url
+              a.download = "mala_direta.zip"
+              a.click()
+              URL.revokeObjectURL(url)
+            } catch (err) {
+              alert("Erro ao conectar com a API: " + (err as Error).message)
+            }
+          }} 
+          disabled={objects.length === 0}
+        >
+          Mala Direta (Lote)
         </Button>
       </div>
     </div>

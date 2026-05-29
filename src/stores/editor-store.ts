@@ -1,6 +1,8 @@
 import { create } from "zustand"
 import { immer } from "zustand/middleware/immer"
 import { persist } from "zustand/middleware"
+import { enableMapSet } from "immer"
+enableMapSet()
 import type { AnyCanvasObject, EditorState, ToolType } from "@/types/canvas"
 
 interface EditorActions {
@@ -17,10 +19,13 @@ interface EditorActions {
   duplicateObjects: (ids: string[]) => void
   bringForward: (ids: string[]) => void
   sendBackward: (ids: string[]) => void
+  reorderObject: (id: string, targetId: string, position: "before" | "after") => void
   copySelected: () => void
   pasteClipboard: () => void
   setAvailableFields: (fields: { key: string; label: string }[]) => void
   setPreviewFields: (enabled: boolean) => void
+  setShowRulers: (enabled: boolean) => void
+  setRulerUnit: (unit: "px" | "mm" | "cm" | "in") => void
 }
 
 export const useEditorStore = create<EditorState & EditorActions>()(
@@ -35,6 +40,18 @@ export const useEditorStore = create<EditorState & EditorActions>()(
     clipboard: [],
     availableFields: [],
     previewFields: true,
+    showRulers: true,
+    rulerUnit: "px" as const,
+
+    setShowRulers: (enabled) =>
+      set((state) => {
+        state.showRulers = enabled
+      }),
+
+    setRulerUnit: (unit) =>
+      set((state) => {
+        state.rulerUnit = unit
+      }),
 
     setPreviewFields: (enabled) =>
       set((state) => {
@@ -137,6 +154,17 @@ export const useEditorStore = create<EditorState & EditorActions>()(
         }
       }),
 
+    reorderObject: (id, targetId, position) =>
+      set((state) => {
+        const fromIdx = state.objects.findIndex((o) => o.id === id)
+        const targetIdx = state.objects.findIndex((o) => o.id === targetId)
+        if (fromIdx === -1 || targetIdx === -1) return
+        const [obj] = state.objects.splice(fromIdx, 1)
+        const newTargetIdx = state.objects.findIndex((o) => o.id === targetId)
+        const insertAt = position === "before" ? newTargetIdx + 1 : newTargetIdx
+        state.objects.splice(insertAt, 0, obj)
+      }),
+
     copySelected: () =>
       set((state) => {
         const copied = state.objects
@@ -167,6 +195,8 @@ export const useEditorStore = create<EditorState & EditorActions>()(
       snapEnabled: state.snapEnabled,
       zoom: state.zoom,
       previewFields: state.previewFields,
+      showRulers: state.showRulers,
+      rulerUnit: state.rulerUnit,
     }),
   }
 )

@@ -1,23 +1,64 @@
 import type { AnyCanvasObject, RectObject, EllipseObject, LineObject, TextObject } from "@/types/canvas"
 
+import { parseText } from "./text-parser"
+import { wrapTextSegments } from "./text-measure"
+
 export function objectsToSVG(objects: AnyCanvasObject[]): string {
   const svgParts = objects.map((obj) => {
     switch (obj.type) {
       case "rect": {
         const r = obj as RectObject
-        return `<rect x="${r.x}" y="${r.y}" width="${r.width}" height="${r.height}" rx="${r.rx || 0}" ry="${r.ry || 0}" fill="${r.fill}" stroke="${r.stroke}" stroke-width="${r.strokeWidth}" opacity="${r.opacity}" />`
+        const dash = r.strokeDasharray ? ` stroke-dasharray="${r.strokeDasharray}"` : ""
+        return `<g transform="${r.rotation ? `rotate(${r.rotation} ${r.x + (r.pivotX ?? 0.5) * r.width} ${r.y + (r.pivotY ?? 0.5) * r.height})` : ''}"><rect x="${r.x}" y="${r.y}" width="${r.width}" height="${r.height}" rx="${r.rx || 0}" ry="${r.ry || 0}" fill="${r.fill}" stroke="${r.stroke}" stroke-width="${r.strokeWidth}"${dash} opacity="${r.opacity}" ${dataAttributes(r)} /></g>`
       }
       case "ellipse": {
         const e = obj as EllipseObject
-        return `<ellipse cx="${e.x + e.width / 2}" cy="${e.y + e.height / 2}" rx="${e.width / 2}" ry="${e.height / 2}" fill="${e.fill}" stroke="${e.stroke}" stroke-width="${e.strokeWidth}" opacity="${e.opacity}" />`
+        const dash = e.strokeDasharray ? ` stroke-dasharray="${e.strokeDasharray}"` : ""
+        return `<g transform="${e.rotation ? `rotate(${e.rotation} ${e.x + (e.pivotX ?? 0.5) * e.width} ${e.y + (e.pivotY ?? 0.5) * e.height})` : ''}"><ellipse cx="${e.x + e.width / 2}" cy="${e.y + e.height / 2}" rx="${e.width / 2}" ry="${e.height / 2}" fill="${e.fill}" stroke="${e.stroke}" stroke-width="${e.strokeWidth}"${dash} opacity="${e.opacity}" ${dataAttributes(e)} /></g>`
       }
       case "line": {
         const l = obj as LineObject
-        return `<line x1="${l.x}" y1="${l.y}" x2="${l.x2}" y2="${l.y2}" stroke="${l.stroke}" stroke-width="${l.strokeWidth}" opacity="${l.opacity}" />`
+        const dash = l.strokeDasharray ? ` stroke-dasharray="${l.strokeDasharray}"` : ""
+        return `<g transform="${l.rotation ? `rotate(${l.rotation} ${l.x + (l.pivotX ?? 0.5) * l.width} ${l.y + (l.pivotY ?? 0.5) * l.height})` : ''}"><line x1="${l.x}" y1="${l.y}" x2="${l.x2}" y2="${l.y2}" stroke="${l.stroke}" stroke-width="${l.strokeWidth}"${dash} opacity="${l.opacity}" ${dataAttributes(l)} /></g>`
       }
       case "text": {
         const t = obj as TextObject
-        return `<text x="${t.x}" y="${t.y + t.fontSize}" font-size="${t.fontSize}" font-family="${t.fontFamily}" font-weight="${t.fontWeight}" fill="${t.fill}" opacity="${t.opacity}">${escapeXml(t.text)}</text>`
+        const pivotX = t.x + (t.pivotX ?? 0.5) * t.width
+        const pivotY = t.y + (t.pivotY ?? 0.5) * t.height
+        const rotationTransform = t.rotation ? `rotate(${t.rotation} ${pivotX} ${pivotY})` : ""
+        const bgDash = t.bgStrokeDasharray ? ` stroke-dasharray="${t.bgStrokeDasharray}"` : ""
+        
+        let bgRect = ""
+        if (t.bgFill || t.bgStroke) {
+          bgRect = `<rect x="${t.x}" y="${t.y}" width="${t.width}" height="${t.height}" fill="${t.bgFill || 'none'}" stroke="${t.bgStroke || 'none'}" stroke-width="${t.bgStrokeWidth || 0}"${bgDash} />`
+        }
+
+        const segments = parseText(t.text)
+        const maxWidth = t.textMode === "box" ? t.width : Infinity
+        // For export, we force previewFields=false so wrapTextSegments uses the <label> length.
+        // Wait, the user wants to see the field KEY in other viewers. We should measure using the key!
+        const lines = wrapTextSegments(segments, maxWidth, t.fontSize, t.fontFamily, t.fontWeight, false)
+        
+        const strokeAttr = t.stroke === "none" && t.strokeWidth > 0 ? "#000000" : t.stroke
+        const clipId = `clip-${t.id}`
+        const clipPath = `<clipPath id="${clipId}"><rect x="${t.x}" y="${t.y}" width="${t.width}" height="${t.height}" /></clipPath>`
+        
+        let tspans = ""
+        lines.forEach((line, lineIdx) => {
+          const dy = lineIdx === 0 ? "1em" : "1.2em"
+          tspans += `<tspan x="${t.x}" dy="${dy}">`
+          line.segments.forEach((seg) => {
+            if (seg.type === "field") {
+              // IN EXPORT: Show the KEY (nome do campo)
+              tspans += `<tspan data-field-key="${seg.key}">&lt;\`${seg.key}\`&gt;</tspan>`
+            } else {
+              tspans += `<tspan xml:space="preserve">${escapeXml(seg.value)}</tspan>`
+            }
+          })
+          tspans += `</tspan>`
+        })
+
+        return `<g transform="${rotationTransform}" ${dataAttributes(t)}>${clipPath}${bgRect}<text clip-path="url(#${clipId})" x="${t.x}" y="${t.y}" font-size="${t.fontSize}" font-family="${t.fontFamily}" font-weight="${t.fontWeight}" fill="${t.fill}" stroke="${strokeAttr}" stroke-width="${t.strokeWidth}" opacity="${t.opacity}" style="paint-order: stroke fill;">${tspans}</text></g>`
       }
       default:
         return ""
@@ -134,7 +175,16 @@ export function svgToObjects(svgString: string): AnyCanvasObject[] {
       }
     }
 
-    if (obj) objects.push(obj)
+    if (obj) {
+      const data = readDataAttributes(el)
+      if (data.id) obj.id = data.id
+      if (data.rotation !== undefined) obj.rotation = data.rotation
+      if (data.visible !== undefined) obj.visible = data.visible
+      if (data.locked !== undefined) obj.locked = data.locked
+      if (data.name) obj.name = data.name
+      if (data.metadata) obj.metadata = data.metadata
+      objects.push(obj)
+    }
   })
 
   return objects
@@ -196,4 +246,56 @@ function parseAttr(val: string | null, fallback: number): number {
 
 function escapeXml(str: string): string {
   return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;")
+}
+
+function dataAttributes(obj: AnyCanvasObject): string {
+  const parts: string[] = [
+    `data-editor-id="${obj.id}"`,
+    `data-editor-rotation="${obj.rotation}"`,
+    `data-editor-visible="${obj.visible}"`,
+    `data-editor-locked="${obj.locked}"`,
+    `data-editor-name="${escapeXml(obj.name)}"`,
+  ]
+  if (obj.pivotX !== undefined && obj.pivotY !== undefined) {
+    parts.push(`data-editor-pivot-x="${obj.pivotX}"`)
+    parts.push(`data-editor-pivot-y="${obj.pivotY}"`)
+  }
+  if (obj.metadata && Object.keys(obj.metadata).length > 0) {
+    parts.push(`data-editor-metadata='${escapeXml(JSON.stringify(obj.metadata))}'`)
+  }
+  return parts.join(" ")
+}
+
+function readDataAttributes(el: Element): Partial<AnyCanvasObject> {
+  const data: Partial<AnyCanvasObject> = {}
+  const id = el.getAttribute("data-editor-id")
+  if (id) data.id = id
+  const rotation = el.getAttribute("data-editor-rotation")
+  if (rotation !== null) {
+    const val = parseFloat(rotation)
+    if (!isNaN(val)) data.rotation = val
+  }
+  const visible = el.getAttribute("data-editor-visible")
+  if (visible !== null) data.visible = visible === "true"
+  const locked = el.getAttribute("data-editor-locked")
+  if (locked !== null) data.locked = locked === "true"
+  const name = el.getAttribute("data-editor-name")
+  if (name) data.name = name
+  const pivotX = el.getAttribute("data-editor-pivot-x")
+  const pivotY = el.getAttribute("data-editor-pivot-y")
+  if (pivotX !== null && pivotY !== null) {
+    const px = parseFloat(pivotX)
+    const py = parseFloat(pivotY)
+    if (!isNaN(px) && !isNaN(py)) {
+      data.pivotX = px
+      data.pivotY = py
+    }
+  }
+  const metadata = el.getAttribute("data-editor-metadata")
+  if (metadata) {
+    try {
+      data.metadata = JSON.parse(metadata)
+    } catch {}
+  }
+  return data
 }
