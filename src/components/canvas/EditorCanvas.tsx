@@ -58,11 +58,26 @@ export function EditorCanvas() {
   useEffect(() => {
     if (canvasRef.current && containerRef.current) {
       const rect = containerRef.current.getBoundingClientRect()
+      
+      const availableWidth = rect.width - 60 // margem de segurança
+      const availableHeight = rect.height - 60
+      
+      let optimalZoom = Math.min(availableWidth / documentWidth, availableHeight / documentHeight)
+      optimalZoom = Math.max(0.1, Math.min(10, optimalZoom)) // limita entre 10% e 1000%
+
       const centerX = rect.width / 2
       const centerY = rect.height / 2
-      const tx = centerX - (documentWidth * storeZoom) / 2
-      const ty = centerY - (documentHeight * storeZoom) / 2
-      canvasRef.current.setMatrix([storeZoom, 0, 0, storeZoom, tx, ty])
+      const tx = centerX - (documentWidth * optimalZoom) / 2
+      const ty = centerY - (documentHeight * optimalZoom) / 2
+      
+      canvasRef.current.setMatrix([optimalZoom, 0, 0, optimalZoom, tx, ty])
+      
+      // Atualiza a UI do zoom
+      if (Math.abs(useEditorStore.getState().zoom - optimalZoom) > 0.001) {
+        setTimeout(() => {
+          useEditorStore.getState().setZoom(optimalZoom)
+        }, 10)
+      }
     }
   }, [fitToScreenTrigger, documentWidth, documentHeight])
 
