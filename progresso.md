@@ -43,10 +43,11 @@ Este documento acompanha resumidamente as etapas e o progresso do desenvolviment
   - Redução no tamanho dos *handles* de seleção (pontos azuis) para cerca de 1/3 do tamanho original para evitar clique acidental e poluição visual.
   - Aperfeiçoamento da funcionalidade do input de Zoom, permitindo alteração rápida via tecla `Enter` ou clique forçado fora da janela para descartar edição.
 
-### 3.  (29/05/2026)
+### 3. Deixar versionado e coisas afins (29/05/2026)
 - Ajustes no projeto
 - Envio para o github
 - Criação do arquivo progresso.md
+- criação de uma page no github
 
 
 ---

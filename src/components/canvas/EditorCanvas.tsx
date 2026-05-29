@@ -52,6 +52,26 @@ export function EditorCanvas() {
   const showRulers = useEditorStore((s) => s.showRulers)
   const rulerUnit = useEditorStore((s) => s.rulerUnit)
   const storeZoom = useEditorStore((s) => s.zoom)
+  const fitToScreenTrigger = useEditorStore((s) => s.fitToScreenTrigger)
+
+  // Lida com o clique de "Encaixar" e centraliza na primeira vez
+  useEffect(() => {
+    if (canvasRef.current && containerRef.current) {
+      const rect = containerRef.current.getBoundingClientRect()
+      const centerX = rect.width / 2
+      const centerY = rect.height / 2
+      const tx = centerX - (documentWidth * storeZoom) / 2
+      const ty = centerY - (documentHeight * storeZoom) / 2
+      canvasRef.current.setMatrix([storeZoom, 0, 0, storeZoom, tx, ty])
+    }
+  }, [fitToScreenTrigger, documentWidth, documentHeight])
+
+  // Dispara o centralizar logo que abre a página
+  useEffect(() => {
+    setTimeout(() => {
+      useEditorStore.getState().triggerFitToScreen(false)
+    }, 50)
+  }, [])
 
   useEffect(() => {
     if (Math.abs(storeZoom - matrix[0]) > 0.001 && canvasRef.current) {
